@@ -1,144 +1,270 @@
-/* -*- java -*-
-# =========================================================================== #
-#                                                                             #
-#                         Copyright (C) KNAPP AG                              #
-#                                                                             #
-#       The copyright to the computer program(s) herein is the property       #
-#       of Knapp.  The program(s) may be used   and/or copied only with       #
-#       the  written permission of  Knapp  or in  accordance  with  the       #
-#       terms and conditions stipulated in the agreement/contract under       #
-#       which the program(s) have been supplied.                              #
-#                                                                             #
-# =========================================================================== #
-*/
-
 package com.knapp.codingcontest.solution;
 
-import java.util.Collection;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 import com.knapp.codingcontest.data.InputData;
 import com.knapp.codingcontest.data.Institute;
 import com.knapp.codingcontest.data.Order;
 import com.knapp.codingcontest.data.Product;
-import com.knapp.codingcontest.operations.CostFactors;
-import com.knapp.codingcontest.operations.InfoSnapshot;
-import com.knapp.codingcontest.operations.InfoSnapshot.OperationType;
 import com.knapp.codingcontest.operations.Warehouse;
 import com.knapp.codingcontest.operations.WorkStation;
 
 /**
- * This is the code YOU have to provide
+ * Optimized Solution for KNAPP Coding Contest
  */
 public class Solution {
   public String getParticipantName() {
-    /* lines containing '@TODO' are removed before packaging contest-sandbox
-    return ; // TODO: return your name
+    return "Your Name";  // Replace with your name
   }
 
   public Institute getParticipantInstitution() {
-    /* lines containing '@TODO' are removed before packaging contest-sandbox
-    return Institute. ; // TODO: return the Id of your institute - please refer to the hand-out
+    return Institute.HTL_Rennweg_Wien;  // Replace with your institute
   }
-
-  // ----------------------------------------------------------------------------
 
   protected final Warehouse warehouse;
   protected final WorkStation workStation;
   protected final InputData input;
 
-  // ----------------------------------------------------------------------------
+  // Maps to track product usage
+  private Map<String, Set<Order>> productToOrdersMap = new HashMap<>();
+  private Set<String> assignedProducts = new HashSet<>();
 
   public Solution(final Warehouse warehouse, final InputData input) {
     this.warehouse = warehouse;
-    workStation = warehouse.getWorkStation();
+    this.workStation = warehouse.getWorkStation();
     this.input = input;
 
-    // TODO: prepare data structures (but may also be done in run() method below)
-  }
-
-  // ----------------------------------------------------------------------------
-
-  /**
-   * The main entry-point.
-   *
-   */
-  public void run() throws Exception {
-    // TODO: make calls to API (see below)
-    // lines containing '@TODO' are removed before packaging contest-sandbox
+    // Pre-calculate product to orders mapping
+    for (Order order : input.getAllOrders()) {
+      for (Product product : order.getAllProducts()) {
+        productToOrdersMap.computeIfAbsent(product.getCode(), k -> new HashSet<>()).add(order);
+      }
     }
   }
 
-  // ----------------------------------------------------------------------------
-  // ----------------------------------------------------------------------------
+  public void run() throws Exception {
+    Set<Order> activeOrders = new HashSet<>();
+    PriorityQueue<Order> orderQueue = rankOrders();
 
-  /**
-   * Just for documentation purposes.
-   *
-   * Method may be removed without any side-effects
-   *   divided into these sections
-   *
-   *     <li><em>input methods</em>
-   *
-   *     <li><em>main interaction methods</em>
-   *         - these methods are the ones that make (explicit) changes to the warehouse
-   *
-   *     <li><em>information</em>
-   *         - information you might need for your solution
-   *
-   *     <li><em>additional information</em>
-   *         - various other infos: statistics, information about (current) costs, ...
-   *
-   */
-  @SuppressWarnings("unused")
-  private void apis() throws Exception {
-    // ----- input -----
+    while (!orderQueue.isEmpty() || !activeOrders.isEmpty()) {
+      // Start orders if slots available
+      while (activeOrders.size() < workStation.getOrderSlots() && !orderQueue.isEmpty()) {
+        Order order = orderQueue.poll();
+        try {
+          workStation.startOrder(order);
+          activeOrders.add(order);
+        } catch (Exception e) {
+          // Skip if cannot start
+        }
+      }
 
-    final Collection<Order> orders = input.getAllOrders();
+      if (activeOrders.isEmpty()) break;
 
-    final Order order = orders.iterator().next();
-    final Product product = order.getOpenProducts().get(0);
+      // Try to process until no more progress
+      boolean progress = true;
+      while (progress) {
+        progress = false;
 
-    final WorkStation workStation = warehouse.getWorkStation();
+        // Assign needed products if slots available
+        if (assignedProducts.size() < workStation.getProductSlots()) {
+          String bestProduct = findBestProductToAssign(activeOrders);
+          if (bestProduct != null) {
+            Product product = findProductByCode(bestProduct);
+            try {
+              workStation.assignProduct(product);
+              assignedProducts.add(bestProduct);
+              progress = true;
+            } catch (Exception e) {
+              // Skip if cannot assign
+            }
+          }
+        }
 
-    // ----- main interaction methods -----
+        // Pick products for orders
+        for (Order order : new ArrayList<>(activeOrders)) {
+          if (order.isFinished()) {
+            activeOrders.remove(order);
+            progress = true;
+            continue;
+          }
 
-    workStation.startOrder(order);
-    workStation.assignProduct(product);
-    workStation.removeProduct(product);
-    workStation.pickOrder(order, product);
+          for (Product product : order.getOpenProducts()) {
+            if (assignedProducts.contains(product.getCode())) {
+              try {
+                workStation.pickOrder(order, product);
+                progress = true;
+                break;
+              } catch (Exception e) {
+                // Skip if cannot pick
+              }
+            }
+          }
+        }
 
-    // ----- information -----
+        // Remove unused products
+        Set<String> neededProducts = new HashSet<>();
+        for (Order order : activeOrders) {
+          for (Product product : order.getOpenProducts()) {
+            neededProducts.add(product.getCode());
+          }
+        }
 
-    final List<Product> aps = order.getAllProducts();
-    final List<Product> ops = order.getOpenProducts();
-    final boolean ofin = order.isFinished();
+        Set<String> productsToRemove = new HashSet<>(assignedProducts);
+        productsToRemove.removeAll(neededProducts);
 
-    final int wsos = workStation.getOrderSlots();
-    final int wsps = workStation.getProductSlots();
+        for (String code : productsToRemove) {
+          Product product = findAssignedProductByCode(code);
+          if (product != null) {
+            try {
+              workStation.removeProduct(product);
+              assignedProducts.remove(code);
+              progress = true;
+            } catch (Exception e) {
+              // Skip if cannot remove
+            }
+          }
+        }
+      }
 
-    final Set<Order> waaos = workStation.getActiveOrders();
-    final Set<Product> wsaps = workStation.getAssignedProducts();
-
-    // ----- additional information -----
-
-    final CostFactors costFactors = input.getCostFactors();
-    final double cf_pa = costFactors.getProductAssignmentCost();
-    final double cf_up = costFactors.getUnfinishedProductPenalty();
-
-    final InfoSnapshot info = warehouse.getInfoSnapshot();
-
-    final int up = info.getUnfinishedProductCount();
-    final int oso = info.getOperationCount(OperationType.StartOrder);
-    final int oap = info.getOperationCount(OperationType.AssignProduct);
-    final int orp = info.getOperationCount(OperationType.RemoveProduct);
-    final int opo = info.getOperationCount(OperationType.PickOrder);
-
-    final double c_uo = info.getUnfinishedOrdersCost();
-    final double c_pa = info.getProductAssignmentCost();
-    final double c_t = info.getTotalCost();
+      // If stuck, try to make space by removing least useful product
+      if (!progress && !activeOrders.isEmpty() && assignedProducts.size() >= workStation.getProductSlots()) {
+        String leastUseful = findLeastUsefulProduct(activeOrders);
+        if (leastUseful != null) {
+          Product product = findAssignedProductByCode(leastUseful);
+          if (product != null) {
+            try {
+              workStation.removeProduct(product);
+              assignedProducts.remove(leastUseful);
+            } catch (Exception e) {
+              // Skip if cannot remove
+            }
+          }
+        }
+      }
+    }
   }
 
-  // ----------------------------------------------------------------------------
+  /**
+   * Rank orders by efficiency (orders sharing more products with others are prioritized)
+   */
+  private PriorityQueue<Order> rankOrders() {
+    Map<Order, Double> orderScores = new HashMap<>();
+
+    for (Order order : input.getAllOrders()) {
+      Set<String> productCodes = new HashSet<>();
+      for (Product product : order.getAllProducts()) {
+        productCodes.add(product.getCode());
+      }
+
+      // Calculate score based on product sharing with other orders
+      double score = 0;
+      for (String code : productCodes) {
+        score += productToOrdersMap.get(code).size();
+      }
+      score /= productCodes.size(); // Normalize by order size
+
+      orderScores.put(order, score);
+    }
+
+    // Create priority queue with orders sorted by score (higher first)
+    PriorityQueue<Order> queue = new PriorityQueue<>((o1, o2) ->
+            Double.compare(orderScores.get(o2), orderScores.get(o1)));
+    queue.addAll(input.getAllOrders());
+
+    return queue;
+  }
+
+  /**
+   * Find product that will benefit the most active orders
+   */
+  private String findBestProductToAssign(Set<Order> activeOrders) {
+    Map<String, Integer> productUsage = new HashMap<>();
+
+    for (Order order : activeOrders) {
+      Set<String> orderProducts = new HashSet<>();
+      for (Product product : order.getOpenProducts()) {
+        if (!assignedProducts.contains(product.getCode())) {
+          orderProducts.add(product.getCode());
+        }
+      }
+
+      for (String code : orderProducts) {
+        productUsage.put(code, productUsage.getOrDefault(code, 0) + 1);
+      }
+    }
+
+    // Find product with highest usage
+    String bestProduct = null;
+    int maxUsage = 0;
+
+    for (Map.Entry<String, Integer> entry : productUsage.entrySet()) {
+      if (entry.getValue() > maxUsage) {
+        maxUsage = entry.getValue();
+        bestProduct = entry.getKey();
+      }
+    }
+
+    return bestProduct;
+  }
+
+  /**
+   * Find least useful product among currently assigned products
+   */
+  private String findLeastUsefulProduct(Set<Order> activeOrders) {
+    Map<String, Integer> productUsage = new HashMap<>();
+
+    // Initialize all assigned products with zero count
+    for (String code : assignedProducts) {
+      productUsage.put(code, 0);
+    }
+
+    // Count usages in active orders
+    for (Order order : activeOrders) {
+      for (Product product : order.getOpenProducts()) {
+        String code = product.getCode();
+        if (assignedProducts.contains(code)) {
+          productUsage.put(code, productUsage.get(code) + 1);
+        }
+      }
+    }
+
+    // Find product with lowest usage
+    String leastUseful = null;
+    int minUsage = Integer.MAX_VALUE;
+
+    for (Map.Entry<String, Integer> entry : productUsage.entrySet()) {
+      if (entry.getValue() < minUsage) {
+        minUsage = entry.getValue();
+        leastUseful = entry.getKey();
+      }
+    }
+
+    return leastUseful;
+  }
+
+  /**
+   * Find any product instance with specified code
+   */
+  private Product findProductByCode(String code) {
+    for (Order order : input.getAllOrders()) {
+      for (Product product : order.getAllProducts()) {
+        if (product.getCode().equals(code)) {
+          return product;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find assigned product by code
+   */
+  private Product findAssignedProductByCode(String code) {
+    for (Product product : workStation.getAssignedProducts()) {
+      if (product.getCode().equals(code)) {
+        return product;
+      }
+    }
+    return null;
+  }
 }
