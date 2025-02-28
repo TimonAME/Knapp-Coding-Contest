@@ -122,19 +122,18 @@ public class Solution {
    * Sort products based on proximity to current position and to each other
    */
   private void sortProductsByProximity(List<String> products, Map<String, Shelf> bestShelvesForProducts) {
-    final Position startPosition = currentPosition;
-
-    Collections.sort(products, new Comparator<String>() {
-      @Override
-      public int compare(String p1, String p2) {
-        Position pos1 = bestShelvesForProducts.get(p1).getPosition();
-        Position pos2 = bestShelvesForProducts.get(p2).getPosition();
-        double cost1 = warehouse.calcCost(startPosition, pos1);
-        double cost2 = warehouse.calcCost(startPosition, pos2);
-
-        return Double.compare(cost1, cost2);
-      }
+    Collections.sort(products, (p1, p2) -> {
+      Position pos1 = bestShelvesForProducts.get(p1).getPosition();
+      Position pos2 = bestShelvesForProducts.get(p2).getPosition();
+      // Consider side changes in cost calculation
+      double cost1 = getSideChangeCost(currentPosition, pos1) + warehouse.calcCost(currentPosition, pos1);
+      double cost2 = getSideChangeCost(currentPosition, pos2) + warehouse.calcCost(currentPosition, pos2);
+      return Double.compare(cost1, cost2);
     });
+  }
+
+  private double getSideChangeCost(Position from, Position to) {
+    return from.side != to.side ? warehouse.getCostFactors().getSideChangeCost() : 0;
   }
 
   /**
