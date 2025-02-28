@@ -240,27 +240,6 @@ public class Solution {
   }
 
   /**
-   * Find an available bin for the order
-   */
-  private Bin findAvailableBin(List<Bin> allBins) {
-    // Find the closest available bin
-    Bin closestBin = null;
-    double minCost = Double.MAX_VALUE;
-
-    for (Bin bin : allBins) {
-      if (warehouse.getOrderAssignedToBin(bin) == null) {
-        double cost = warehouse.calcCost(currentPosition, bin.getPosition());
-        if (cost < minCost) {
-          minCost = cost;
-          closestBin = bin;
-        }
-      }
-    }
-
-    return closestBin;
-  }
-
-  /**
    * Find the best shelf for each product (closest to central position)
    */
   private Map<String, Shelf> findBestShelvesForProducts(Map<String, List<Shelf>> productShelves) {
