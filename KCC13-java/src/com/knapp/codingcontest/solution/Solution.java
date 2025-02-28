@@ -74,48 +74,111 @@ public class Solution {
    * Process a single order completely
    */
   private void processOrder(Order order, List<Bin> allBins, Map<String, Shelf> bestShelvesForProducts) throws Exception {
-    // Assign a bin to this order
-    Bin assignedBin = findAvailableBin(allBins);
-    warehouse.assignOrder(order, assignedBin);
-
-    // Process all products in this order
     List<String> productsToProcess = new ArrayList<>(order.getOpenProducts());
-
-    // Sort products by shelf location to minimize travel distance
     sortProductsByProximity(productsToProcess, bestShelvesForProducts);
 
-    Set<String> processedProducts = new HashSet<>();
+    // Group products by their shelf locations
+    Map<Position, List<String>> productGroups = new HashMap<>();
+    for (String product : productsToProcess) {
+      Position shelfPos = bestShelvesForProducts.get(product).getPosition();
+      productGroups.computeIfAbsent(shelfPos, k -> new ArrayList<>()).add(product);
+    }
+
+    // Create clusters of nearby products
+    List<List<String>> productClusters = new ArrayList<>();
+    Position lastPos = currentPosition;
+    List<String> currentCluster = new ArrayList<>();
 
     for (String product : productsToProcess) {
-      if (!processedProducts.contains(product)) {
-        // Find best shelf for this product
-        Shelf bestShelf = bestShelvesForProducts.get(product);
+      Position productPos = bestShelvesForProducts.get(product).getPosition();
 
-        // Pick product from shelf
-        warehouse.pickProduct(bestShelf, product);
-        currentPickedProduct = product;
-        currentPosition = bestShelf.getPosition();
+      // Start new cluster if distance is too large or different side
+      if (!currentCluster.isEmpty() &&
+              (warehouse.calcCost(lastPos, productPos) > 50 ||
+                      lastPos.side != productPos.side)) {
+        productClusters.add(new ArrayList<>(currentCluster));
+        currentCluster.clear();
+      }
 
-        // Count how many of this product we need
-        int neededCount = 0;
-        for (String p : order.getOpenProducts()) {
-          if (p.equals(product)) {
-            neededCount++;
+      currentCluster.add(product);
+      lastPos = productPos;
+    }
+    if (!currentCluster.isEmpty()) {
+      productClusters.add(currentCluster);
+    }
+
+    // Process each cluster with its own bin
+    Set<String> processedProducts = new HashSet<>();
+    for (List<String> cluster : productClusters) {
+      // Find closest available bin to the cluster's center
+      Position clusterCenter = calculateClusterCenter(cluster, bestShelvesForProducts);
+      Bin assignedBin = findClosestBin(allBins, clusterCenter);
+
+      if (assignedBin != null) {
+        warehouse.assignOrder(order, assignedBin);
+
+        // Process all products in this cluster
+        for (String product : cluster) {
+          if (!processedProducts.contains(product)) {
+            Shelf bestShelf = bestShelvesForProducts.get(product);
+
+            // Count occurrences of this product in the cluster
+            int neededCount = (int) cluster.stream().filter(p -> p.equals(product)).count();
+
+            warehouse.pickProduct(bestShelf, product);
+            currentPickedProduct = product;
+            currentPosition = bestShelf.getPosition();
+
+            // Put all instances of this product
+            for (int i = 0; i < neededCount; i++) {
+              warehouse.putProduct(assignedBin);
+              currentPosition = assignedBin.getPosition();
+            }
+
+            processedProducts.add(product);
           }
         }
-
-        // Put all instances of this product
-        for (int i = 0; i < neededCount; i++) {
-          warehouse.putProduct(assignedBin);
-          currentPosition = assignedBin.getPosition();
-        }
-
-        processedProducts.add(product);
       }
     }
 
     // Finish the order once all products are processed
     warehouse.finishOrder(order);
+  }
+
+  private Position calculateClusterCenter(List<String> cluster, Map<String, Shelf> bestShelvesForProducts) {
+    // Count shelves on each side
+    int leftCount = 0;
+    int rightCount = 0;
+    int lengthwiseSum = 0;
+
+    for (String product : cluster) {
+      Shelf shelf = bestShelvesForProducts.get(product);
+      if (shelf != null) {
+        if (shelf.getPosition().side == Position.Side.Left) {
+          leftCount++;
+        } else {
+          rightCount++;
+        }
+        lengthwiseSum += shelf.getPosition().lengthwise;
+      }
+    }
+
+    // Determine the dominant side
+    Position.Side centerSide = (leftCount > rightCount) ? Position.Side.Left : Position.Side.Right;
+
+    // Calculate average lengthwise position
+    int centerLengthwise = cluster.isEmpty() ? 1 : Math.max(1, lengthwiseSum / cluster.size());
+
+    return new Position(centerSide, Position.Offset.Bin, centerLengthwise);
+  }
+
+  private Bin findClosestBin(List<Bin> allBins, Position referencePos) {
+    return allBins.stream()
+            .filter(bin -> warehouse.getOrderAssignedToBin(bin) == null)
+            .min((b1, b2) -> Double.compare(
+                    warehouse.calcCost(referencePos, b1.getPosition()),
+                    warehouse.calcCost(referencePos, b2.getPosition())))
+            .orElse(null);
   }
 
   /**
